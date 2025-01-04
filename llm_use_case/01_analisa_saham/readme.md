@@ -20,8 +20,8 @@ A Streamlit-based web application that provides stock analysis using real-time m
 
 1. Clone this repository:
 ```bash
-git clone <repository-url>
-cd stock-analysis-dashboard
+git clone [<repository-url>](https://github.com/ainabler/showcase.git)
+cd llm_use_Case/01_analisa_saham
 ```
 
 2. Create a virtual environment (recommended):
@@ -39,7 +39,7 @@ pip install -r requirements.txt
 
 1. Start the Streamlit application:
 ```bash
-streamlit run app.py
+streamlit run main.py
 ```
 
 2. Open your web browser and navigate to the URL shown in your terminal (typically http://localhost:8501)
