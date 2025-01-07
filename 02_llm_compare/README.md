@@ -27,7 +27,7 @@ Follow these steps to set up the project locally:
 
 1. **Clone the Repository**
    ```bash
-   https://github.com/hnif85/ainabler.git
+   https://github.com/ainabler/showcase.git
    ```
 
 2. **Create a Virtual Environment**
