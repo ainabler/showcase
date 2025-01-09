@@ -6,263 +6,255 @@ import os
 from pydub import AudioSegment
 import tempfile
 import shutil
-import subprocess
 
 def validate_api_key(api_key: str) -> bool:
-    """
-    Validate the Google API key by attempting a simple configuration.
-    
-    Args:
-        api_key (str): The API key to validate
-        
-    Returns:
-        bool: True if API key is valid, False otherwise
-    """
     try:
-        genai.configure(api_key=st.session_state.api_key)
-        # Try to access a simple model configuration to test the key
+        genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.0-flash-thinking-exp-1219')
         return True
     except Exception as e:
         logging.error(f"API key validation failed: {str(e)}")
         return False
 
-def setup_logging():
-    """Configure logging for the application"""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
-
 def convert_aac_to_mp3(input_path: str) -> str:
-    """
-    Convert AAC file to MP3 format.
-    
-    Args:
-        input_path (str): Path to the input AAC file
-    
-    Returns:
-        str: Path to the converted MP3 file
-    """
     try:
-        # Create temporary directory for conversion
         temp_dir = tempfile.mkdtemp()
         output_path = os.path.join(temp_dir, "converted_audio.mp3")
-        
-        # Load the AAC file
         audio = AudioSegment.from_file(input_path, format="aac")
-        
-        # Export as MP3
         audio.export(output_path, format="mp3", bitrate="192k")
-        
         logging.info(f"Successfully converted {input_path} to MP3")
         return output_path
-        
     except Exception as e:
         logging.error(f"Error converting AAC to MP3: {str(e)}")
         raise
 
-def upload_to_gemini(file_path: str, mime_type: str = "audio/mp3"):
-    """
-    Uploads a file to Gemini AI.
-    
-    Args:
-        file_path (str): Path to the file to upload
-        mime_type (str): MIME type of the file (default: "audio/mp3")
-    
-    Returns:
-        FileData: Uploaded file object or None if upload fails
-    """
+def upload_to_gemini(file_path: str, api_key: str, mime_type: str = "audio/mp3"):
     try:
+        # Ensure API key is configured before upload
+        genai.configure(api_key=api_key)
         file = genai.upload_file(file_path, mime_type=mime_type)
-        logging.info(f"Successfully uploaded file '{file.display_name}' as: {file.uri}")
+        logging.info(f"Successfully uploaded file to Gemini: {file_path}")
         return file
     except Exception as e:
         logging.error(f"Error uploading file: {str(e)}")
         return None
 
 def initialize_gemini(api_key: str) -> genai.GenerativeModel:
-    """
-    Initialize the Gemini AI model with specified configuration.
-    
-    Args:
-        api_key (str): Google API key for authentication
-    
-    Returns:
-        GenerativeModel: Configured Gemini model instance
-    """
     genai.configure(api_key=api_key)
-    
     generation_config = {
-        "temperature": 1,
+        "temperature": 0.7,
         "top_p": 0.95,
         "top_k": 40,
         "max_output_tokens": 8192,
-        "response_mime_type": "text/plain",
     }
-    
     return genai.GenerativeModel(
         model_name="gemini-2.0-flash-exp",
         generation_config=generation_config,
     )
 
 def process_audio_with_gemini(
-    files: List[str],
+    file_path: str,
     api_key: str,
     prompt: str,
-    source: str
 ) -> Optional[str]:
-    """
-    Process audio files using Gemini AI.
-    
-    Args:
-        files (List[str]): List of file paths to process
-        api_key (str): Google API key
-        prompt (str): Input prompt for the model
-        source (str): Source identifier
-    
-    Returns:
-        str: Generated response text or None if processing fails
-    """
     try:
-        # Upload files
-        uploaded_files = []
-        for file_path in files:
-            uploaded_file = upload_to_gemini(file_path)
-            if uploaded_file:
-                uploaded_files.append(uploaded_file)
-            else:
-                raise Exception(f"Failed to upload file: {file_path}")
+        if not api_key:
+            raise ValueError("API key is required")
 
-        # Initialize model
-        model = initialize_gemini(api_key)
+        # Convert if needed
+        temp_file = None
+        processing_path = file_path
+        if file_path.lower().endswith('.aac'):
+            processing_path = convert_aac_to_mp3(file_path)
+            temp_file = processing_path
 
-        # Start chat session
-        chat_session = model.start_chat(
-            history=[
-                {
-                    "role": "user",
-                    "parts": uploaded_files
-                }
-            ]
-        )
+        try:
+            # Upload and process
+            uploaded_file = upload_to_gemini(processing_path, api_key)
+            if not uploaded_file:
+                raise Exception("Failed to upload file to Gemini")
 
-        # Send prompt and get response
-        response = chat_session.send_message(prompt)
-        return response.text
+            model = initialize_gemini(api_key)
+            chat_session = model.start_chat(
+                history=[{"role": "user", "parts": [uploaded_file]}]
+            )
+            response = chat_session.send_message(prompt)
+            return response.text
+
+        finally:
+            # Cleanup temp file if it was created
+            if temp_file and os.path.exists(temp_file):
+                os.remove(temp_file)
+                logging.info(f"Cleaned up temporary file: {temp_file}")
 
     except Exception as e:
         logging.error(f"Error processing audio: {str(e)}")
         return None
 
-def get_file_extension(filename: str) -> str:
-    """Get the file extension from a filename."""
-    return os.path.splitext(filename)[1].lower()
+def generate_notulen(file_path: str, api_key: str) -> Optional[str]:
+    prompt = """Buatkan notulen rapat yang lengkap dan terstruktur dari rekaman audio ini. 
+    Harap sertakan:
+    1. Tanggal dan waktu rapat (jika disebutkan)
+    2. Peserta rapat (jika disebutkan)
+    3. Agenda/topik yang dibahas
+    4. Poin-poin penting dari setiap pembahasan
+    5. Keputusan yang diambil
+    6. Tindak lanjut atau tugas yang diberikan
+    
+    Format notulen dalam bentuk yang formal dan profesional."""
+    
+    return process_audio_with_gemini(file_path, api_key, prompt)
+
+def generate_transcript(file_path: str, api_key: str) -> Optional[str]:
+    prompt = """Buatkan transkrip lengkap dari audio ini dengan format berikut:
+    1. Identifikasi pembicara jika ada multiple speaker (Contoh: Speaker 1:, Speaker 2:)
+    2. Tambahkan timestamp setiap 1-2 menit
+    3. Sertakan semua detail percakapan termasuk jeda, tawa, atau interupsi dalam tanda kurung
+    4. Perbaiki tata bahasa dan pengucapan tanpa mengubah konteks
+    
+    Harap pertahankan akurasi dan konteks asli percakapan."""
+    
+    return process_audio_with_gemini(file_path, api_key, prompt)
+
+def generate_action_plan(file_path: str, api_key: str) -> Optional[str]:
+    prompt = """Analisis rekaman audio ini dan buatkan action plan yang terstruktur dengan:
+    1. Daftar semua tugas dan tindak lanjut yang disebutkan
+    2. Prioritas untuk setiap tugas (High/Medium/Low)
+    3. Target waktu penyelesaian (jika disebutkan)
+    4. Penanggung jawab untuk setiap tugas (jika disebutkan)
+    5. Dependencies atau ketergantungan antar tugas
+    6. Catatan atau rekomendasi khusus
+    
+    Format dalam bentuk yang mudah difollow up dan actionable."""
+    
+    return process_audio_with_gemini(file_path, api_key, prompt)
+
+def generate_summary(file_path: str, api_key: str) -> Optional[str]:
+    prompt = """Buatkan ringkasan komprehensif dari audio ini dengan format berikut:
+
+    KONTEKS
+    - Jenis konten (podcast/rapat/video/dll)
+    - Durasi (jika terdeteksi)
+    - Jumlah pembicara
+    - Bahasa yang digunakan
+    
+    RINGKASAN UTAMA
+    - Berikan ringkasan singkat namun lengkap tentang inti pembahasan
+    - Highlight 3-5 poin penting yang dibahas
+    - Kutip pernyataan-pernyataan kunci (jika ada)
+    
+    DETAIL PENTING
+    - Nama atau istilah penting yang disebutkan
+    - Angka atau statistik yang disebutkan
+    - Referensi atau sumber yang dikutip
+    - Informasi teknis yang relevan
+    
+    KESIMPULAN & INSIGHT
+    - Kesimpulan utama dari pembahasan
+    - Insight atau pembelajaran penting
+    - Tindak lanjut atau rekomendasi (jika ada)
+    
+    Format output dalam bentuk yang mudah dibaca dengan pemisahan section yang jelas.
+    Fokus pada informasi yang benar-benar penting dan relevan.
+    Hindari informasi yang terlalu detail atau tidak signifikan."""
+    
+    return process_audio_with_gemini(file_path, api_key, prompt)
 
 def main():
-    """Main Streamlit application"""
-
-    st.set_page_config("Audio processing",layout="wide",page_icon=":loud_sound:")
-    st.title("Audio Processing with Gemini AI")
-
+    st.set_page_config("Audio Processing", layout="wide", page_icon=":loud_sound:")
+    
+    # Initialize session state
     if "api_key" not in st.session_state:
         st.session_state.api_key = ""
+    if "current_result" not in st.session_state:
+        st.session_state.current_result = None
+    
+    # Sidebar
+    with st.sidebar:
+        st.title("Configuration")
+        
+        # API Key input
+        api_key = st.text_input(
+            "Enter your Google API key:",
+            type="password",
+            help="Get API key from https://aistudio.google.com/app/apikey"
+        )
+        
+        if st.button("Save API Key"):
+            st.session_state.api_key = api_key.strip()
+            if st.session_state.api_key != "":
+                st.success("Successfully saved Gemini API key")
+            else:
+                st.warning("API Key not saved")
+        
+        # File path input
+        file_path = st.text_input(
+            "Audio File Path:",
+            help="Enter the full path to your audio file (supports .mp3, .aac, .ogg, .wav)"
+        )
+        
+        st.markdown("---")
+        
+        # Processing buttons
+        def check_inputs() -> bool:
+            if not st.session_state.api_key:
+                st.error("Please save your API key first")
+                return False
+            if not file_path:
+                st.error("Please provide the audio file path")
+                return False
+            if not os.path.exists(file_path):
+                st.error("File not found at specified path")
+                return False
+            return True
 
+        if st.button("Generate Summary", use_container_width=True):
+            if check_inputs():
+                with st.spinner("Generating summary..."):
+                    result = generate_summary(file_path, st.session_state.api_key)
+                    if result:
+                        st.session_state.current_result = ("Summary", result)
+                    else:
+                        st.error("Failed to generate summary")
+
+        if st.button("Generate Notulen", use_container_width=True):
+            if check_inputs():
+                with st.spinner("Generating notulen..."):
+                    result = generate_notulen(file_path, st.session_state.api_key)
+                    if result:
+                        st.session_state.current_result = ("Notulen", result)
+                    else:
+                        st.error("Failed to generate notulen")
+        
+        if st.button("Generate Transcript", use_container_width=True):
+            if check_inputs():
+                with st.spinner("Generating transcript..."):
+                    result = generate_transcript(file_path, st.session_state.api_key)
+                    if result:
+                        st.session_state.current_result = ("Transcript", result)
+                    else:
+                        st.error("Failed to generate transcript")
+        
+        if st.button("Generate Action Plan", use_container_width=True):
+            if check_inputs():
+                with st.spinner("Generating action plan..."):
+                    result = generate_action_plan(file_path, st.session_state.api_key)
+                    if result:
+                        st.session_state.current_result = ("Action Plan", result)
+                    else:
+                        st.error("Failed to generate action plan")
     
-    # API key handling
-    api_key = st.text_input("Enter your Google API key:", type="password", help="Dapatkan api key dari https://aistudio.google.com/app/apikey")
-    if st.button("simpan"):
-        st.session_state.api_key=api_key
-        if st.session_state.api_key is not "":
-            st.success("Sukses simpan Gemini api key")
-        else:
-            st.warning("API Key belum tersimpan")
+    # Main content
+    st.title("Audio Processing with Gemini AI")
     
-    # File upload
-    uploaded_file = st.file_uploader("Upload audio file", type=["aac", "mp3", "ogg", "wav"])
-    
-    # Prompt input
-    prompt = st.text_area("Enter your prompt:")
-    
-    if st.button("Process Audio"):
-        if not api_key:
-            st.error("Please enter your Google API key")
-            return
-            
-        # Validate API key before proceeding
-        with st.spinner("Validating API key..."):
-            if not validate_api_key(api_key):
-                st.error("""
-                Invalid or unauthorized API key. Please ensure:
-                1. You have entered the correct API key
-                2. The API key has access to Gemini API
-                3. The API key is active and not restricted
-                
-                You can get an API key from: https://makersuite.google.com/app/apikey
-                """)
-                return
-            
-        if not uploaded_file:
-            st.error("Please upload an audio file")
-            return
-            
-        if not prompt:
-            st.error("Please enter a prompt")
-            return
-            
-        try:
-            with st.spinner("Processing audio..."):
-                # Explicitly configure API key before processing
-                genai.configure(api_key=st.session_state.api_key)
-                
-                # Create temporary directory
-                temp_dir = tempfile.mkdtemp()
-                logging.info(f"Created temporary directory: {temp_dir}")
-                
-                # Save uploaded file
-                file_extension = os.path.splitext(uploaded_file.name)[1].lower()
-                temp_input_path = os.path.join(temp_dir, f"input_audio{file_extension}")
-                
-                with open(temp_input_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-                
-                # Convert if needed and process
-                if file_extension == '.aac':
-                    st.info("Converting AAC to MP3...")
-                    processing_path = convert_aac_to_mp3(temp_input_path)
-                else:
-                    processing_path = temp_input_path
-                
-                # Process with Gemini
-                result = process_audio_with_gemini(
-                    files=[processing_path],
-                    api_key=api_key,
-                    prompt=prompt,
-                    source="streamlit_app"
-                )
-                
-                if result:
-                    st.success("Processing complete!")
-                    st.markdown(result)
-                    #st.text_area("Result:", value=result, height=300)
-                else:
-                    st.error("Failed to process audio")
-                
-                # Cleanup
-                try:
-                    shutil.rmtree(temp_dir)
-                except Exception as e:
-                    logging.warning(f"Error cleaning up temporary files: {str(e)}")
-                
-        except Exception as e:
-            st.error(f"An error occurred: {str(e)}")
-            logging.error(f"Error in main: {str(e)}")
+    if st.session_state.current_result:
+        title, content = st.session_state.current_result
+        st.header(title)
+        st.markdown(content)
 
 if __name__ == "__main__":
-    # Configure logging
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
-    
     main()
